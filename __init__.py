@@ -7,7 +7,7 @@ bl_info = {
   "version": (0, 2, 0),
   "blender": (2, 80, 0),
   "location": "File > Import-Export",
-  "description": "Export Quake 3 Map",
+  "description": "Export Quake3 Brush Map",
   "warning": "",
   "wiki_url": "",
   "tracker_url": "",
@@ -78,7 +78,10 @@ def save_model(path,obj,scale,precision,basedir,shaderlist):
   if len(obj.material_slots) == 0:
     print("  Missing material for model object: " + obj.name)
     return []
-  nobj = obj.to_mesh(bpy.context.scene,True,"PREVIEW")
+
+  dgraph = bpy.context.evaluated_depsgraph_get()
+  nobj = obj.to_mesh(preserve_all_data_layers=True, depsgraph=dgraph)
+  
   matrix = obj.matrix_world.copy()
   matrix[0][3] = 0
   matrix[1][3] = 0
@@ -121,7 +124,7 @@ def save_model(path,obj,scale,precision,basedir,shaderlist):
         else:
           scene = bpy.context.scene
           scene.render.image_settings.file_format="JPEG" #"JPEG2000","TARGA","TARGA_RAW"
-          image.save_render(os.path.dirname(path) + "/" + shader + ".jpg",scene)
+          image.save_render(os.path.dirname(path) + "/" + shader + ".jpg",scene=scene)
       shader_append(shaderlist,shader.encode())
       for f in nobj.polygons:
         if f.material_index != matindex:
@@ -156,7 +159,7 @@ def save_model(path,obj,scale,precision,basedir,shaderlist):
         md3.numTags += 1
     for frame in range(startframe,startframe + md3.numFrames):
       bpy.context.scene.frame_set(frame)
-      fobj = obj.to_mesh(bpy.context.scene,True,'PREVIEW')
+      fobj = obj.to_mesh(preserve_all_data_layers=True, depsgraph=dgraph)
       nframe = md3_encode.md3Frame()
       nframe.name = str(frame - startframe)
       md3.frames.append(nframe)
@@ -164,7 +167,7 @@ def save_model(path,obj,scale,precision,basedir,shaderlist):
         vert = fobj.vertices[vi]
         nvert = md3_encode.md3Vert()
         nvert.normal = nvert.Encode(vert.normal)
-        nvert.xyz = matrix * vert.co * scale
+        nvert.xyz = matrix @ vert.co * scale
         for i in range(0,3):
           nvert.xyz[i] = round(nvert.xyz[i],precision)
           nframe.mins[i] = min(nframe.mins[i],nvert.xyz[i])
@@ -223,7 +226,7 @@ def save_model(path,obj,scale,precision,basedir,shaderlist):
     uvlist = []
     normallist = []
     for v in nobj.vertices:
-      v2 = matrix * v.co
+      v2 = matrix @ v.co
       v2 = v2 * scale
       vertlist.append("v " + str(round(v2[0],precision)) + " " + str(round(v2[1],precision)) + " " + str(round(v2[2],precision)) + "\n")
       vn = [None] * 3
@@ -246,7 +249,13 @@ def save_model(path,obj,scale,precision,basedir,shaderlist):
       file.write(n.encode())
     for matindex in range(0,len(obj.material_slots)):
       image = None
+      
+      if obj.material_slots[matindex].material is None:
+        print("Warning: no material for object " + obj.name + " at index " + str(matindex))
+        continue
+        
       shader = basedir + obj_prop(obj.material_slots[matindex].material.quake3,"shader",obj.material_slots[matindex].material.name).replace(".","")
+      
       for n in obj.material_slots[matindex].material.node_tree.nodes:
         if n.type == "TEX_IMAGE":
           image = n.image
@@ -258,7 +267,7 @@ def save_model(path,obj,scale,precision,basedir,shaderlist):
         else:
           scene = bpy.context.scene
           scene.render.image_settings.file_format="JPEG" #"JPEG2000","TARGA","TARGA_RAW"
-          image.save_render(os.path.dirname(path) + "/" + shader + ".jpg",scene)
+          image.save_render(os.path.dirname(path) + "/" + shader + ".jpg",scene=scene)
       file.write(b"g " + shader.encode() + b"\n")
       file.write(b"usemtl " + shader.encode() + b"\n")
       shader_append(shaderlist,shader.encode())
@@ -289,13 +298,15 @@ def save_model(path,obj,scale,precision,basedir,shaderlist):
       propertylist.append("\"origin\" \"" + str(int(round(obj.matrix_world[0][3] * scale,precision))) + " " + \
                           str(int(round(obj.matrix_world[1][3] * scale,precision))) + " " + \
                           str(int(round(obj.matrix_world[2][3] * scale,precision))) + "\"\n")
-  bpy.data.meshes.remove(nobj)
+  #bpy.data.meshes.remove(nobj)
+  obj.to_mesh_clear();
+  
   print("    Done")
   return propertylist
 def tri_append(matrix,v1,v2,v3,scale,normal,br,text,detail):
-  af = (matrix * v1) * scale
-  bf = (matrix * v2) * scale
-  cf = (matrix * v3) * scale
+  af = (matrix @ v1) * scale
+  bf = (matrix @ v2) * scale
+  cf = (matrix @ v3) * scale
   tri = [[  int(round(bf.x,0)),
         int(round(bf.y,0)),
         int(round(bf.z,0)) ],
@@ -346,8 +357,12 @@ def quake_map(path,exportselected,scale,precision,texture,basedir,shaderfile,bru
     bpy.ops.object.mode_set(mode="OBJECT")
   except:
     pass
-  bpy.context.scene.update()
+  
+  #bpy.context.scene.update()
+  
+  dgraph = bpy.context.evaluated_depsgraph_get()
   origframe = bpy.context.scene.frame_current
+  
   expobjs = bpy.data.objects
   if exportselected == True:
     expobjs = bpy.context.selected_objects
@@ -364,7 +379,7 @@ def quake_map(path,exportselected,scale,precision,texture,basedir,shaderfile,bru
           entity.append(propertylist)
         if obj.quake3.modelbrush == False:
           continue
-      mesh = obj.to_mesh(bpy.context.scene,True,"PREVIEW")
+      mesh = obj.to_mesh(preserve_all_data_layers=True, depsgraph=dgraph)
       brush = []
       brusheslist.append(brush)
       propertylist = []
@@ -511,9 +526,9 @@ def quake_map(path,exportselected,scale,precision,texture,basedir,shaderfile,bru
                             str(int(round(obj.matrix_world[1][3] * scale,0))) + " " + \
                             str(int(round(obj.matrix_world[2][3] * scale,0))) + "\"\n")
       if angles == False:
-        up = obj.matrix_world.to_quaternion() * mathutils.Vector((0.0,1.0,0.0))
-        right = obj.matrix_world.to_quaternion() * mathutils.Vector((-1.0,0.0,0.0))
-        dir = obj.matrix_world.to_quaternion() * mathutils.Vector((0.0,0.0,-1.0))
+        up = obj.matrix_world.to_quaternion() @ mathutils.Vector((0.0,1.0,0.0))
+        right = obj.matrix_world.to_quaternion() @ mathutils.Vector((-1.0,0.0,0.0))
+        dir = obj.matrix_world.to_quaternion() @ mathutils.Vector((0.0,0.0,-1.0))
         yaw = math.atan2(dir[1],dir[0]) * 180 / math.pi
         pitch = -math.atan2(dir[2],math.sqrt(dir[0] * dir[0] + dir[1] * dir[1])) * 180 / math.pi
         roll = math.atan2(right[2],up[2]) * 180 / math.pi
@@ -605,34 +620,45 @@ bpy.types.Scene.brushwidth    = FloatProperty(name = "Brush width",description =
 bpy.types.Scene.hiddentexture = StringProperty(name = "Hidden Texture",description = "Used on hidden brush faces.",maxlen = 1024,default = "common/invisible")
 """
 
-class ExportBrushMap(bpy.types.Operator):
+from bpy_extras.io_utils import ExportHelper
+
+class ExportBrushMap(bpy.types.Operator, ExportHelper):
   bl_idname   = "export.brushmap"
   bl_label    = "Export brush map"
-  filepath    = StringProperty(subtype = "FILE_PATH",name = "File path",description = "Filepath for exporting")
+  filename_ext = ".map"
+  filter_glob = StringProperty(default="*.map", options={'HIDDEN'})
+
   def draw(self,context):
     scene = context.scene
-    self.layout.prop(scene,"exportselected")
-    self.layout.prop(scene,"scale")
-    self.layout.prop(scene,"precision")
+    self.layout.prop(scene.quake3,"exportselected")
+    self.layout.prop(scene.quake3,"scale")
+    self.layout.prop(scene.quake3,"precision")
     box = self.layout.box()
     box.label(text="Model Options")
-    box.prop(scene,"basedir")
-    box.prop(scene,"shaderfile")
+    box.prop(scene.quake3,"basedir")
+    box.prop(scene.quake3,"shaderfile")
     box = self.layout.box()
     box.label(text="Brush Defaults")
-    box.prop(scene,"texture")
-    box.prop(scene,"brushwidth")
-    box.prop(scene,"hiddentexture")
+    box.prop(scene.quake3,"texture")
+    box.prop(scene.quake3,"brushwidth")
+    box.prop(scene.quake3,"hiddentexture")
   def execute(self,context):
     scene = context.scene
-    quake_map(self.filepath,scene.quake3.exportselected,scene.scale,scene.precision,scene.texture,scene.basedir,scene.shaderfile,scene.quake3.brushwidth,scene.quake3.hiddentexture)
+    quake_map(self.filepath,scene.quake3.exportselected,scene.quake3.scale,scene.quake3.precision,scene.quake3.texture,scene.quake3.basedir,scene.quake3.shaderfile,scene.quake3.brushwidth,scene.quake3.hiddentexture)
     return {"FINISHED"}
-  def invoke(self,context,event):
-    wm = context.window_manager
-    wm.fileselect_add(self)
-    return {"RUNNING_MODAL"}
+    
+ # def invoke(self,context,event):
+ #   wm = context.window_manager
+ #   wm.fileselect_add(self)
+ #   return {"RUNNING_MODAL"}
+
+import os.path
+
 def export(self,context):
-  self.layout.operator(ExportBrushMap.bl_idname,text="Quake 3 Map")
+  #path = os.path.split(bpy.data.filepath)[1]
+  #path = path[:len(".blend")] + ".map"
+  
+  self.layout.operator(ExportBrushMap.bl_idname,text="Quake 3 Brush Map (.map)")
 
 class ToolPanel(bpy.types.Panel):
   bl_label = "Quake Map Exporter"
@@ -698,7 +724,6 @@ def skybox(scene,camobj,dir,name,resx,resy):
   origfilepath = scene.render.filepath
   origmatrix = camobj.matrix_world.copy()
   origloc = camobj.location.copy()
-  origalphamode = scene.render.alpha_mode
   scene.camera = camobj
   scene.render.resolution_x = resx
   scene.render.resolution_y = resy
@@ -708,9 +733,9 @@ def skybox(scene,camobj,dir,name,resx,resy):
   #Set Transparent BG
   origcyclestrans = None
   if scene.render.engine == "CYCLES":
-    origcyclestrans = scene.cycles.film_transparent
-    scene.cycles.film_transparent = True
-  scene.render.alpha_mode = "TRANSPARENT"
+    origcyclestrans = scene.render.film_transparent
+    scene.render.film_transparent = True
+  
   camera_euler_rotations = (
     ("bk",180,0),
     ("ft",0,0),
@@ -718,13 +743,13 @@ def skybox(scene,camobj,dir,name,resx,resy):
     ("rt",-90,0),
     ("up",0,-90),
     ("dn",0,90))
-  up = camobj.matrix_world.to_quaternion() * mathutils.Vector((0.0,1.0,0.0))
-  right = camobj.matrix_world.to_quaternion() * mathutils.Vector((-1.0,0.0,0.0))
+  up = camobj.matrix_world.to_quaternion() @ mathutils.Vector((0.0,1.0,0.0))
+  right = camobj.matrix_world.to_quaternion() @ mathutils.Vector((-1.0,0.0,0.0))
   for rotation in camera_euler_rotations:
     if rotation[1] != 0.0:
-      camobj.matrix_world = mathutils.Matrix.Rotation(rotation[1] * degree2rad,4,up) * origmatrix
+      camobj.matrix_world = mathutils.Matrix.Rotation(rotation[1] * degree2rad,4,up) @ origmatrix
     elif rotation[2] != 0.0:
-      camobj.matrix_world = mathutils.Matrix.Rotation(rotation[2] * degree2rad,4,right) * origmatrix
+      camobj.matrix_world = mathutils.Matrix.Rotation(rotation[2] * degree2rad,4,right) @ origmatrix
     camobj.location = origloc
     scene.render.filepath = os.path.join(dir,name + "_" + rotation[0] + ".tga")
     bpy.ops.render.render(write_still = True)
@@ -738,12 +763,12 @@ def skybox(scene,camobj,dir,name,resx,resy):
   scene.render.filepath = origfilepath
   
   if scene.render.engine == "CYCLES":
-    scene.cycles.film_transparent = origcyclestrans
-  scene.render.alpha_mode = origalphamode
+    scene.render.film_transparent = origcyclestrans
   
 class SkyboxButton(bpy.types.Operator):
   bl_idname = "quakemap.skybox"
   bl_label = "Generate Skybox"
+  
   def execute(self,context):
     scene = context.scene
     #Find a camera
